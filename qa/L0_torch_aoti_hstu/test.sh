@@ -11,11 +11,12 @@
 # (Devtech-Compute/distributed-recommender: ci/tritonserver_test.sh), which
 # splits these phases across two container images.
 #
-# The test image must provide the recsys-examples stack (export tooling,
-# dynamicemb, the C++ KV-cache runtime, FlexKV, the torch_aoti model
-# configuration, and the HSTU client), with the HSTU dataset and checkpoint
-# mounted into RECSYS_DIR. tritonserver itself comes from TRITON_DIR, which CI
-# points at a build from the pipeline under test.
+# The test image must layer the recsys-examples stack (export tooling, dynamicemb,
+# the C++ KV-cache runtime, FlexKV, the torch_aoti model configuration, and the
+# HSTU client) on top of the tritonserver under test, with the HSTU dataset and
+# checkpoint mounted into RECSYS_DIR. CI builds that image from the
+# recsys-examples Dockerfile.tritonserver with BASE_IMAGE set to the server image
+# built by the pipeline.
 
 source ../common/util.sh
 
@@ -41,14 +42,10 @@ export CUDA_VISIBLE_DEVICES=0
 
 TESTDIR=`pwd`
 
-# TRITON_DIR selects which Triton is exercised. The recsys image ships a released
-# tritonserver with a pinned PyTorch backend, so CI points TRITON_DIR at a mounted
-# tree built by this pipeline in order to catch regressions in Triton itself.
 TRITON_DIR=${TRITON_DIR:="/opt/tritonserver"}
 SERVER=${TRITON_DIR}/bin/tritonserver
 BACKEND_DIR=${BACKEND_DIR:=${TRITON_DIR}/backends}
 SERVER_TIMEOUT=${SERVER_TIMEOUT:=300}
-export LD_LIBRARY_PATH=${TRITON_DIR}/lib:${LD_LIBRARY_PATH}
 
 # recsys-examples HSTU tree shipped in the test image. inference_aoti holds the
 # export script, the C++ KV-cache runtime, the FlexKV launcher, the torch_aoti
@@ -176,8 +173,9 @@ start_kvcache_server || exit 1
 
 SERVER_ARGS="--model-repository=${MODELDIR} --backend-directory=${BACKEND_DIR} --log-verbose=1"
 echo -e "${COLOR_DARK}Running ${SERVER} (backends: ${BACKEND_DIR})${COLOR_RESET}"
-# Reports a dynamic-linker mismatch between the overlaid tritonserver and the
-# image's libraries directly, instead of as an opaque startup timeout.
+# The image LD_PRELOADs the HSTU ops libraries into every process, so run the
+# server once up front: a link error surfaces here rather than as an opaque
+# startup timeout.
 if ! ${SERVER} --version; then
     echo -e "${COLOR_ERROR}\n***\n*** ${SERVER} failed to run\n***${COLOR_RESET}" 1>&2
     stop_kvcache_server
